@@ -1,4 +1,4 @@
-#include "remarkable.h"
+#include "remarkablefile.h"
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -15,17 +15,18 @@ static void upload(const char *name,const QByteArray &data,bool valid=true) {
     assert(write(fd,data.data(),data.size())==data.size()); close(fd);
     int result=rml_finish(name,1); assert(valid ? result==0 : result<0);
 }
-int main() {
+static void checkLibrary(const char *folder,const char *title) {
+    const QByteArray document=QByteArray(folder)+'/'+title+".pdf";
     QTemporaryDir dir; assert(dir.isValid()); assert(rml_init(dir.path().toUtf8())==0);
-    assert(rml_mkdir("书籍")==0); upload("书籍/测试.pdf",pdf);
+    assert(rml_mkdir(folder)==0); upload(document.constData(),pdf);
     assert(rml_mkdir("x")==0); upload("x/UPPER.PDF",pdf);
     assert(rml_mkdir("a")==0); assert(rml_remove("x/UPPER.pdf")==0);
     assert(rml_remove("x")==0); assert(rml_remove("a")==0);
-    struct stat st{}; assert(rml_stat("书籍/测试.pdf",&st)==0 && st.st_size==pdf.size());
-    int fd=rml_open("书籍/测试.pdf",O_RDONLY,0); assert(fd>=0);
+    struct stat st{}; assert(rml_stat(document.constData(),&st)==0 && st.st_size==pdf.size());
+    int fd=rml_open(document.constData(),O_RDONLY,0); assert(fd>=0);
     char buffer[1024]; assert(read(fd,buffer,sizeof buffer)==pdf.size()); close(fd);
     assert(QByteArray(buffer,pdf.size())==pdf);
-    assert(rml_open("书籍/测试.pdf",O_CREAT|O_WRONLY,0600)<0 && errno==EEXIST);
+    assert(rml_open(document.constData(),O_CREAT|O_WRONLY,0600)<0 && errno==EEXIST);
     assert(rml_open("bad.txt",O_CREAT|O_WRONLY,0600)<0 && errno==ENOTSUP);
     assert(rml_open("../bad.pdf",O_CREAT|O_WRONLY,0600)<0 && errno==EINVAL);
     upload("bad.pdf","invalid",false); assert(rml_stat("bad.pdf",&st)<0);
@@ -34,17 +35,23 @@ int main() {
     for (auto name:QDir(dir.path()).entryList({"*.metadata"})) {
         QFile f(dir.path()+'/'+name); assert(f.open(QIODevice::ReadOnly));
         auto obj=QJsonDocument::fromJson(f.readAll()).object(); f.close();
-        if (obj["type"]!="DocumentType" || obj["visibleName"]!="测试") continue;
+        if (obj["type"]!="DocumentType" || obj["visibleName"]!=QString::fromUtf8(title)) continue;
         book=f.fileName(); obj["futureFirmwareField"]=QJsonObject{{"keep",42}};
         assert(f.open(QIODevice::WriteOnly)); f.write(QJsonDocument(obj).toJson());
     }
-    assert(rml_rename("书籍/测试.pdf","renamed.pdf")==0);
+    assert(rml_rename(document.constData(),"renamed.pdf")==0);
     QFile f(book); assert(f.open(QIODevice::ReadOnly));
     auto obj=QJsonDocument::fromJson(f.readAll()).object();
     assert(obj["futureFirmwareField"].toObject()["keep"].toInt()==42);
     assert(obj["version"].toInt()==2); assert(obj["parent"]=="");
     assert(rml_remove("renamed.pdf")==0); assert(rml_stat("renamed.pdf",&st)<0);
-    assert(rml_remove("书籍")==0);
+    assert(rml_remove(folder)==0);
     int count=0; assert(rml_list("",[](const char*,int,int64_t,void*p){++*(int*)p;},&count)==0); assert(count==0);
-    puts("PASS direct library import/read/rename/move/trash, validation and unknown-field preservation");
+}
+int main() {
+    checkLibrary("Books","Sample");
+    // Unicode fixtures test filesystem behavior; they are data, not UI strings.
+    checkLibrary("书籍","测试");
+    checkLibrary("Bücher","Résumé");
+    puts("PASS ASCII and Unicode library operations, validation and unknown-field preservation");
 }
